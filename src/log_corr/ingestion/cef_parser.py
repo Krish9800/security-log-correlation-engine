@@ -16,10 +16,8 @@ class CEFParser:
     # Device Event Class ID|Name|Severity|Extension
     CEF_HEADER_PREFIX = "CEF:"
 
-    # Extension key-value regex handling escaped characters
-    EXT_KV_PATTERN = re.compile(
-        r"([a-zA-Z0-9_\-\.]+)=((?:\\.|[^=])+?)(?=(?:\s+[a-zA-Z0-9_\-\.]+=|$))"
-    )
+    # Extension key splitter pattern for linear O(N) extraction
+    EXT_KEY_SPLIT_PATTERN = re.compile(r"(?:^|\s+)([a-zA-Z0-9_\-\.]+)=\s*")
 
     def parse(self, raw_line: str) -> NormalizedLogEvent:
         """Parse raw CEF log line into NormalizedLogEvent."""
@@ -139,14 +137,17 @@ class CEFParser:
         return parts
 
     def _parse_extensions(self, extension_str: str) -> dict[str, str]:
-        """Extract key-value pairs from CEF extension field."""
+        """Extract key-value pairs from CEF extension field in linear O(N) time."""
         result: dict[str, str] = {}
-        if not extension_str:
+        if not extension_str or "=" not in extension_str:
             return result
 
-        for match in self.EXT_KV_PATTERN.finditer(extension_str):
-            key = match.group(1).strip()
-            val = match.group(2).strip().replace("\\=", "=").replace("\\\\", "\\")
+        tokens = self.EXT_KEY_SPLIT_PATTERN.split(extension_str)
+        # tokens structure: [preceding_text, key1, val1, key2, val2, ...]
+        for i in range(1, len(tokens), 2):
+            key = tokens[i].strip()
+            raw_val = tokens[i + 1].strip() if i + 1 < len(tokens) else ""
+            val = raw_val.replace("\\=", "=").replace("\\\\", "\\")
             result[key] = val
         return result
 

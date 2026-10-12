@@ -1,0 +1,28 @@
+services:
+  log-corr-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: security-log-correlation-engine
+    ports:
+      - "8000:8000"
+    environment:
+      - LOG_CORR_ENV=production
+      - LOG_CORR_HOST=0.0.0.0
+      - LOG_CORR_PORT=8000
+      - LOG_CORR_DB_PATH=/app/data/correlation_engine.db
+      - LOG_CORR_TIME_WINDOW_MINUTES=60
+      - LOG_CORR_CORRELATION_BUFFER_MAX_SIZE=50000
+    volumes:
+      - engine-data:/app/data
+    restart: unless-stopped
+    read_only: false
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  engine-data:
+    driver: local
