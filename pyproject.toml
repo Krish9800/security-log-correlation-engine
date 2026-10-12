@@ -27,6 +27,7 @@ dev = [
     "ruff>=0.4.0",
     "mypy>=1.10.0",
     "bandit>=1.7.8",
+    "types-PyYAML>=6.0.0",
 ]
 
 [project.scripts]
