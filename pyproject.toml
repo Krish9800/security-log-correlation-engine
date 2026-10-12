@@ -28,6 +28,7 @@ dev = [
     "mypy>=1.10.0",
     "bandit>=1.7.8",
     "types-PyYAML>=6.0.0",
+    "httpx>=0.27.0",
 ]
 
 [project.scripts]
