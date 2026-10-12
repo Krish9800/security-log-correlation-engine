@@ -58,7 +58,12 @@ class AlertDispatcher:
         self, incident: CorrelatedIncident, channel: str | None = None
     ) -> AlertNotification:
         """Synthesize notification and route to configured target channels."""
-        target_channel = channel or ("all" if self.webhook_url else "console")
+        if channel:
+            target_channel = channel
+        elif self.webhook_url or self.output_file:
+            target_channel = "all"
+        else:
+            target_channel = "console"
         alert = self.create_notification(incident, channel=target_channel)
 
         success = False
