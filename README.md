@@ -1,166 +1,206 @@
-# Security Log Correlation Engine
+# Security Log Correlation Engine (`log-corr`)
 
-A high-performance security log correlation and detection engine for identifying multi-stage threats across distributed logs (Syslog RFC 5424/3164, ArcSight CEF, structured JSON, Windows Event Logs) using sliding time-window stateful correlation, MITRE ATT&CK attack chain rules, SQLite WAL persistence, and real-time alert dispatching.
+High-Performance Multi-Stage Threat Detection, ECS/OCSF Event Normalization, Sliding-Window Stream Correlation, MITRE ATT&CK Attack Chains, and Real-Time Alert Dispatching.
 
----
-
-## Key Features
-
-- **Multi-Format Ingestion**: Ingests Syslog (RFC 5424 / RFC 3164), ArcSight CEF, structured JSON, and Windows Event Logs with resilient fallback parsing.
-- **Unified Security Taxonomy**: ECS/OCSF-aligned normalized schema (`NormalizedLogEvent`) with typed timestamps, severity scoring, network 5-tuples, and MITRE tactics.
-- **Sliding Time-Window Engine**: Memory-bounded deque-backed event tracking per entity key (`source_ip`, `target_user`, `host`) with stream-relative time eviction.
-- **Multi-Stage Threat Correlation**:
-  - **Threshold Detection**: High-frequency single-action anomalies (e.g. brute force).
-  - **Sequence Detection**: Ordered, causally linked multi-stage events (e.g. Recon $\to$ Breach $\to$ Lateral Movement).
-  - **Composite Attack Chains**: Cross-tactic MITRE ATT&CK progression.
-- **Built-in & Custom YAML Rules**: Out-of-the-box attack chain rules (Brute Force, PrivEsc, Data Exfiltration) with dynamic YAML loader.
-- **Incident Synthesis & Alert Dispatch**: Composite risk-scored `CorrelatedIncident` generation with multi-channel alert dispatcher (Webhook, Syslog, Console, In-Memory).
-- **SQLite WAL Persistence**: Zero-overhead, transactional SQLite persistence running in write-ahead log (WAL) mode with busy timeouts and full query filtering.
-- **FastAPI Control Plane**: Asynchronous REST API for single/bulk log ingestion, rule management, and incident queries.
-- **Typer & Rich CLI**: Command-line interface with interactive table visualizations and live log streaming.
-- **Production & Security Hardened**: Rootless Docker container (UID 10001), STRIDE threat model, 100% strict type hints (`mypy --strict`), PEP 8 compliance (`ruff`), and adversarial test suite.
+[![CI Pipeline](https://github.com/Krish9800/security-log-correlation-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Krish9800/security-log-correlation-engine/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python: 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
+[![Taxonomy: ECS / OCSF](https://img.shields.io/badge/Taxonomy-ECS%20%2F%20OCSF-purple.svg)](https://www.elastic.co/guide/en/ecs/current/index.html)
+[![Framework: MITRE ATT&CK](https://img.shields.io/badge/Framework-MITRE%20ATT%26CK-red.svg)](https://attack.mitre.org/)
 
 ---
 
-## Architecture Overview
+## Overview & Problem Statement
 
+Modern enterprise Security Operations Centers (SOCs) ingest tens of millions of raw log events every day from disparate operating systems, perimeter firewalls, directory services, and network appliances. Analyzing raw logs in isolation causes severe alert fatigue and misses subtle multi-stage attack campaigns: an attacker performing initial password spraying, followed by a privilege escalation attempt, and culminating in unauthorized data egress might generate separate, low-severity log lines hours apart across different servers.
+
+**Security Log Correlation Engine (`log-corr`)** solves this problem through stateful, sliding time-window stream correlation. It ingests heterogenous log formats (Syslog RFC 5424/3164, ArcSight CEF, structured JSON, and Windows Event logs), normalizes them into a unified Elastic Common Schema (ECS) / Open Cybersecurity Schema Framework (OCSF) taxonomy, tracks stateful entity interactions over configurable temporal windows, and synthesizes correlated high-confidence incident alerts mapped directly to the MITRE ATT&CK framework.
+
+---
+
+## Architecture & Data Flow
+
+```mermaid
+flowchart TD
+    subgraph Multi-Format Log Ingestion
+        Syslog[Syslog: RFC 5424 / 3164] --> Dispatcher[LogIngestionDispatcher]
+        CEF[ArcSight Common Event Format CEF] --> Dispatcher
+        JSON[Structured JSON Logs] --> Dispatcher
+        WinEvt[Windows Event Logs] --> Dispatcher
+    end
+
+    subgraph Normalization & Schema Validation
+        Dispatcher --> Normalizer[Event Normalizer]
+        Normalizer --> ECS[NormalizedLogEvent: ECS / OCSF Taxonomy]
+    end
+
+    subgraph Stateful Correlation Engine
+        ECS --> StateManager[Sliding-Window State Manager]
+        StateManager --> EntityBuffers[Memory-Bounded Deques by Entity: Source IP / Host / User]
+
+        EntityBuffers --> RuleEvaluator{Rule Engine}
+        RuleEvaluator --> ThreshRules[Threshold Rules: Frequency Anomalies]
+        RuleEvaluator --> SeqRules[Sequence Rules: Ordered Multi-Stage Exploits]
+        RuleEvaluator --> ChainRules[Composite Rules: MITRE ATT&CK Chains]
+    end
+
+    subgraph Persistence & Dispatching
+        RuleEvaluator --> IncidentSynth[CorrelatedIncident Synthesizer]
+        IncidentSynth --> SQLite[(SQLite WAL Storage: Events & Incidents)]
+        IncidentSynth --> Dispatch[AlertDispatcher]
+
+        Dispatch --> Webhook[Webhook Notification: Slack / Discord / SOAR]
+        Dispatch --> SyslogOut[RFC 5424 Syslog Egress]
+        Dispatch --> ConsoleUI[Rich Terminal UI & Logs]
+        Dispatch --> REST[FastAPI REST API]
+    end
 ```
-                      ┌─────────────────────────────────────────┐
-                      │            Log Ingestion Sources        │
-                      │  Syslog (5424/3164), CEF, JSON, WinEvt  │
-                      └────────────────────┬────────────────────┘
-                                           │
-                                           ▼
-                      ┌─────────────────────────────────────────┐
-                      │          Parsers & Normalizer           │
-                      │       ECS / OCSF Normalized Event       │
-                      └────────────────────┬────────────────────┘
-                                           │
-                                           ▼
-                      ┌─────────────────────────────────────────┐
-                      │       Sliding Window Buffer (Deque)     │
-                      │      Keyed by Source IP / User / Host   │
-                      └────────────────────┬────────────────────┘
-                                           │
-                                           ▼
-                      ┌─────────────────────────────────────────┐
-                      │     Multi-Stage Correlation Engine      │
-                      │   Threshold, Sequence, Attack Chains    │
-                      └──────────────┬───────────────────┬──────┘
-                                     │                   │
-                                     ▼                   ▼
-                      ┌──────────────────────┐   ┌──────────────────────┐
-                      │ SQLite WAL Storage   │   │ Alert Dispatcher     │
-                      │ Events & Incidents   │   │ Webhook, Syslog, etc │
-                      └──────────────────────┘   └──────────────────────┘
-```
 
 ---
 
-## Installation & Quick Start
+## Verified Features & Capabilities
 
-### 1. Local Setup with Virtual Environment
+- **Resilient Multi-Format Parsing**: Auto-detects and extracts structured security fields from Syslog (RFC 5424/3164), ArcSight CEF, structured JSON, and Windows Security event logs.
+- **Unified Security Taxonomy**: Maps heterogeneous log events into standard `NormalizedLogEvent` structures with typed ISO-8601 timestamps, network 5-tuples (`src_ip`, `dst_ip`, `src_port`, `dst_port`), actor identities, and severity classes.
+- **Memory-Bounded Sliding Windows**: Deque-backed sliding buffers isolate events per correlation entity (`source_ip`, `target_user`, `host`) with stream-relative time eviction preventing unbounded memory growth.
+- **Multi-Stage Detection Paradigms**:
+  - *Threshold Rules*: Detect high-volume anomalous spikes (e.g. 5 failed logins within 60 seconds).
+  - *Sequence Rules*: Detect causal sequences of stages (e.g. reconnaissance → authentication bypass → privilege escalation).
+  - *Composite Attack Chains*: Correlate cross-tactic MITRE ATT&CK progression over extended observation windows.
+- **Dynamic YAML Rule Catalog**: Extensible rule engine loaded from built-in standard catalogs or external YAML rule directories.
+- **ACID-Compliant WAL Storage**: SQLite storage running in Write-Ahead Logging (WAL) mode with busy timeout handling, preserving audit trails for events and incidents.
+- **Dual-Interface Management**: Includes an async FastAPI REST API and a Typer/Rich command-line administrative interface.
+
+---
+
+## Technology Stack
+
+- **Core Engine & CLI**: Python 3.12+, Typer, Rich, Pydantic v2
+- **Persistence**: SQLite (WAL mode, foreign key enforcement)
+- **Web API**: FastAPI, Uvicorn, Starlette
+- **Testing & Quality**: Pytest, Pytest-Asyncio, Pytest-Cov, Ruff, Mypy (strict typing)
+- **Containerization**: Rootless multi-stage Docker (`UID 10001`)
+
+---
+
+## CLI Reference & Operational Usage
+
+The platform installs the `log-corr` CLI tool:
 
 ```bash
-# Clone repository
-git clone https://github.com/example/security-log-correlation-engine.git
+# 1. Inspect engine version and active configuration
+log-corr version
+
+# 2. Ingest raw log file into local SQLite storage
+log-corr ingest sample_logs.cef --format cef --db data/correlation.db
+
+# 3. Stream a log file through the correlation engine in real-time
+log-corr correlate access.log --cooldown 300 --output-alerts alerts.json
+
+# 4. Correlate using custom external YAML detection rules
+log-corr correlate security_events.json --rules-dir ./custom_rules/
+
+# 5. List and inspect stored security incidents
+log-corr incidents --status OPEN --severity high --limit 20
+
+# 6. View the active correlation rules catalog
+log-corr rules
+```
+
+---
+
+## REST API Control Plane
+
+Launch the async FastAPI daemon:
+
+```bash
+uvicorn log_corr.api.app:app --host 127.0.0.1 --port 8000
+```
+
+Interactive OpenAPI documentation is available at `http://127.0.0.1:8000/docs`.
+
+### Primary Endpoints
+
+| Method | Endpoint | Description |
+|:-------|:---------|:------------|
+| `GET` | `/health` | Health check and engine telemetry |
+| `POST` | `/api/v1/logs/ingest` | Ingest single or bulk raw log records |
+| `GET` | `/api/v1/incidents` | Query correlated incidents (filterable by status and severity) |
+| `GET` | `/api/v1/incidents/{incident_id}` | Retrieve incident details with underlying triggering events |
+| `GET` | `/api/v1/rules` | List all registered correlation rules |
+| `POST` | `/api/v1/rules` | Register custom correlation rule dynamically |
+| `DELETE` | `/api/v1/rules/{rule_id}` | Deregister a correlation rule |
+| `GET` | `/api/v1/alerts` | Query historical dispatched alert notifications |
+
+---
+
+## Installation & Setup
+
+### Prerequisites
+
+- Python 3.12 or higher
+- Git
+
+### Local Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/Krish9800/security-log-correlation-engine.git
 cd security-log-correlation-engine
 
-# Create virtual environment and install
+# Create and activate virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .[dev]
-```
 
-### 2. Using the CLI
-
-```bash
-# Ingest raw logs directly via stdin or arguments
-log-corr ingest "<134>1 2026-10-12T12:00:00Z auth.corp.internal sshd 1234 - - Failed password for invalid user admin from 198.51.100.55 port 44222 ssh2"
-
-# View current active rules
-log-corr rules list
-
-# Query detected security incidents
-log-corr incidents list --severity HIGH
-
-# Ingest and correlate a file containing mixed logs
-log-corr ingest-file /var/log/auth.log
-```
-
-### 3. Running the FastAPI Server
-
-```bash
-# Start API server locally
-uvicorn log_corr.api.app:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Interactive OpenAPI docs will be available at `http://127.0.0.1:8000/docs`.
-
-### 4. Running via Docker / Docker Compose
-
-```bash
-# Build and run the rootless container
-docker compose up -d
-
-# Check service health
-curl -f http://localhost:8000/health
+# Install in editable mode with development dependencies
+pip install --upgrade pip
+pip install -e ".[dev]"
 ```
 
 ---
 
-## Detection Rules & Attack Chains
+## Testing & Quality Assurance
 
-Rules can be defined in YAML and loaded dynamically:
-
-```yaml
-id: "R-SSH-BRUT"
-name: "SSH Password Brute Force"
-description: "Detects 5 or more failed logins from a single source within 5 minutes"
-rule_type: "THRESHOLD"
-threshold_count: 5
-window_seconds: 300
-entity_key: "source_ip"
-severity: "HIGH"
-tactic: "CREDENTIAL_ACCESS"
-technique_id: "T1110"
-criteria:
-  - field: "event_action"
-    operator: "EQUALS"
-    value: "failed_login"
-```
-
----
-
-## Quality Gates & Verification
-
-The project adheres to strict production software engineering standards:
+Run the comprehensive test suite covering unit tests, integration pipelines, and adversarial scenarios:
 
 ```bash
-# Code formatting and style
-ruff format --check src tests
-ruff check src tests
+# Run all unit, integration, and security tests
+pytest
 
-# Strict static type checking
-mypy --strict src tests
+# Run tests with code coverage report
+pytest --cov=log_corr --cov-report=term-missing
 
-# Security AST vulnerability audit
-bandit -r src/
+# Run code style and lint checks
+ruff check .
+ruff format --check .
 
-# Full test suite with coverage
-pytest --cov=log_corr --cov-fail-under=90 tests/
+# Run static type verification
+mypy src/log_corr
 ```
 
 ---
 
-## Documentation
+## Security Model & Threat Boundaries
 
-- [Threat Model (STRIDE)](docs/threat_model.md)
-- [Architecture Blueprint](https://github.com/example/security-log-correlation-engine)
-- [Changelog](CHANGELOG.md)
+The project includes a formal STRIDE threat model documented in `docs/threat_model.md`:
+
+- **Input Validation**: All raw log streams are sanitized via Pydantic schema validation. Malformed or poisoned log lines are directed to error handlers without crashing the correlation thread.
+- **Memory Boundary Defense**: Sliding correlation windows enforce maximum event bounds per entity key, preventing denial-of-service (DoS) via log flooding.
+- **SQL Injection Prevention**: SQLite queries strictly utilize parameterized SQL statements; dynamic table manipulation is prohibited.
+- **Least Privilege Runtime**: Docker images execute as unprivileged user `UID 10001` with drop-capabilities (`cap_drop: ALL`).
 
 ---
 
-## License
+## Limitations & Known Issues
 
-Apache License 2.0
+- **In-Memory Window Buffer**: Sliding windows are currently held in memory for low-latency stream processing. For multi-node distributed clustering, Redis or Kafka integration is planned.
+- **Out-of-Order Clock Drift**: Log streams with timestamp skew greater than the configured window size may require clock synchronization (NTP).
+
+---
+
+## License & Responsible Use
+
+This project is licensed under the **MIT License** - see the [LICENSE](https://opensource.org/licenses/MIT) details.
+
+> [!NOTE]
+> Designed for defensive security operations, threat hunting, and blue team detection engineering. Ensure log collection and processing comply with applicable internal data governance and privacy policies.
