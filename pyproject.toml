@@ -37,6 +37,10 @@ log-corr = "log_corr.cli.main:app"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+log_corr = ["*.sql", "**/*.sql", "*.yaml", "**/*.yaml"]
+
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
